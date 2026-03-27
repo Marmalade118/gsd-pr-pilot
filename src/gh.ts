@@ -160,13 +160,13 @@ export function fetchComments(ref: PrRef): PrComment[] {
 }
 
 /** Fetch the log output for a failed check run */
-export function fetchCheckLog(ref: PrRef, checkName: string): string | null {
+export function fetchCheckLog(ref: PrRef, checkName: string, branch: string): string | null {
     // gh run view can get logs, but we need the run ID first
     const runs = ghJson<Array<{
         databaseId: number;
         name: string;
         conclusion: string;
-    }>>(`run list --repo ${ref.owner}/${ref.repo} --branch ${ref.number} --json databaseId,name,conclusion --limit 10`);
+    }>>(`run list --repo ${ref.owner}/${ref.repo} --branch ${branch} --json databaseId,name,conclusion --limit 10`);
 
     if (!runs) return null;
 
@@ -178,16 +178,26 @@ export function fetchCheckLog(ref: PrRef, checkName: string): string | null {
 
 /** Reply to a review comment on a PR */
 export function replyToComment(ref: PrRef, commentId: number, body: string): boolean {
-    const result = gh(
-        `api repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments/${commentId}/replies -f body="${body.replace(/"/g, '\\"')}"`,
-    );
-    return result !== null;
+    try {
+        execSync(
+            `gh api repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments/${commentId}/replies --method POST --input -`,
+            {
+                input: JSON.stringify({ body }),
+                encoding: "utf-8",
+                timeout: 30_000,
+                stdio: ["pipe", "pipe", "pipe"],
+            },
+        );
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /** Check if a branch has been force-pushed (compare local HEAD with remote) */
-export function isBranchSafe(ref: PrRef, localHead: string, cwd: string): boolean {
+export function isBranchSafe(ref: PrRef, branchName: string, localHead: string, cwd: string): boolean {
     const remoteHead = gh(
-        `api repos/${ref.owner}/${ref.repo}/git/refs/heads/${ref.number} --jq '.object.sha'`,
+        `api repos/${ref.owner}/${ref.repo}/git/refs/heads/${branchName} --jq '.object.sha'`,
     );
     if (!remoteHead) return true; // Can't verify — assume safe
     return remoteHead === localHead;
