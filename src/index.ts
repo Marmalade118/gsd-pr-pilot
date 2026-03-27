@@ -9,8 +9,10 @@
  * via the filesystem (.gsd/pr-pilot/).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
 import type {
     MonitorState, PrRef, PrTrackingState, MonitorConfig,
 } from "./types.js";
@@ -20,6 +22,12 @@ import {
 } from "./types.js";
 import { loadState, saveState, ensureStateDir, writeReport } from "./state.js";
 import { isGhAvailable } from "./gh.js";
+
+// ── Module-level path resolution (Windows-safe via fileURLToPath) ──
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pollScript = join(__dirname, "poll.js");
 
 // ── Extension registration ─────────────────────────────────────────
 
@@ -49,7 +57,7 @@ export default function prPilot(pi: PiExtensionAPI): void {
 
             switch (subcommand) {
                 case "start":
-                    await handleStart(parts.slice(1), ctx, pi);
+                    await handleStart(parts.slice(1), ctx);
                     break;
                 case "stop":
                     await handleStop(ctx);
@@ -64,15 +72,16 @@ export default function prPilot(pi: PiExtensionAPI): void {
                 case "help":
                     showHelp(ctx);
                     break;
-                default:
+                default: {
                     // Treat bare args as PR refs → start
                     const allRefs = parts.every(p => parsePrRef(p) !== null);
                     if (allRefs) {
-                        await handleStart(parts, ctx, pi);
+                        await handleStart(parts, ctx);
                     } else {
                         ctx.ui.notify(`Unknown subcommand: ${subcommand}. Use /pr-pilot help`, "warning");
                     }
                     break;
+                }
             }
         },
     });
@@ -83,7 +92,6 @@ export default function prPilot(pi: PiExtensionAPI): void {
 async function handleStart(
     prArgs: string[],
     ctx: ExtensionCommandContext,
-    pi: PiExtensionAPI,
 ): Promise<void> {
     if (!isGhAvailable()) {
         ctx.ui.notify("gh CLI not available or not authenticated. Run `gh auth login` first.", "error");
@@ -91,19 +99,48 @@ async function handleStart(
     }
 
     if (prArgs.length === 0) {
-        ctx.ui.notify("Usage: /pr-pilot start owner/repo#1 owner/repo#2 ...", "warning");
+        ctx.ui.notify("Usage: /pr-pilot start owner/repo#1 [--repo /path] [owner/repo#2 ...]", "warning");
         return;
     }
 
-    // Parse PR refs
+    // ── Parse --repo flag ──────────────────────────────────────────
+    let repoPath: string | undefined;
+    const filteredArgs: string[] = [];
+    for (let i = 0; i < prArgs.length; i++) {
+        if (prArgs[i] === "--repo" && i + 1 < prArgs.length) {
+            repoPath = prArgs[i + 1];
+            i++; // skip the path arg
+        } else {
+            filteredArgs.push(prArgs[i]);
+        }
+    }
+
+    // Resolve repo path to absolute; default to cwd if omitted
+    const resolvedRepo = repoPath
+        ? resolve(ctx.cwd, repoPath)
+        : ctx.cwd;
+
+    if (repoPath && !existsSync(resolvedRepo)) {
+        ctx.ui.notify(
+            `Warning: --repo path does not exist: ${resolvedRepo}. Continuing anyway.`,
+            "warning",
+        );
+    }
+
+    // ── Parse PR refs ──────────────────────────────────────────────
     const refs: PrRef[] = [];
-    for (const arg of prArgs) {
+    for (const arg of filteredArgs) {
         const ref = parsePrRef(arg);
         if (!ref) {
             ctx.ui.notify(`Invalid PR reference: ${arg}. Expected format: owner/repo#123`, "error");
             return;
         }
         refs.push(ref);
+    }
+
+    if (refs.length === 0) {
+        ctx.ui.notify("Usage: /pr-pilot start owner/repo#1 [--repo /path] [owner/repo#2 ...]", "warning");
+        return;
     }
 
     // Check for existing monitor
@@ -116,7 +153,13 @@ async function handleStart(
         return;
     }
 
-    // Initialise state
+    // ── Build repoMap: each PR key → resolved repo path ───────────
+    const repoMap: Record<string, string> = {};
+    for (const ref of refs) {
+        repoMap[formatPrRef(ref)] = resolvedRepo;
+    }
+
+    // ── Initialise state ───────────────────────────────────────────
     const prStates = new Map<string, PrTrackingState>();
     for (const ref of refs) {
         prStates.set(formatPrRef(ref), {
@@ -134,6 +177,7 @@ async function handleStart(
         config: {
             ...DEFAULT_MONITOR_CONFIG,
             prs: refs,
+            repoMap,
         },
         prStates,
         startedAt: new Date().toISOString(),
@@ -145,15 +189,32 @@ async function handleStart(
     saveState(ctx.cwd, state);
 
     const prList = refs.map(formatPrRef).join(", ");
-    ctx.ui.notify(`PR Pilot: monitoring ${refs.length} PR(s): ${prList}`, "success");
 
-    // Send a message to the agent to start the background process
-    pi.sendUserMessage(
-        `PR Pilot monitor state has been initialised for ${prList}. ` +
-        `Start the polling loop by running: ` +
-        `bg_shell start with command "node ${join(dirname(import.meta.url.replace("file:///", "")), "poll.js")} ${ctx.cwd}" ` +
-        `label "pr-pilot" type "watcher"`,
-    );
+    // ── Spawn detached watcher process ─────────────────────────────
+    try {
+        const child = spawn("node", [pollScript, ctx.cwd], {
+            detached: true,
+            stdio: "ignore",
+            cwd: ctx.cwd,
+        });
+
+        child.on("error", (err) => {
+            console.error(`[pr-pilot] watcher spawn error: ${err.message}`);
+        });
+
+        child.unref();
+
+        ctx.ui.notify(
+            `PR Pilot: monitoring ${refs.length} PR(s): ${prList}\nRepo path: ${resolvedRepo}\nWatcher started (poll.js detached)`,
+            "success",
+        );
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        state.status = "error";
+        state.lastError = `Failed to spawn watcher: ${message}`;
+        saveState(ctx.cwd, state);
+        ctx.ui.notify(`PR Pilot: failed to start watcher: ${message}`, "error");
+    }
 }
 
 async function handleStop(ctx: ExtensionCommandContext): Promise<void> {
@@ -218,6 +279,7 @@ function showHelp(ctx: ExtensionCommandContext): void {
             "PR Pilot — Background PR Monitor",
             "",
             "Usage:",
+            "  /pr-pilot start owner/repo#1 --repo /path    Start with local repo path",
             "  /pr-pilot start owner/repo#1 [owner/repo#2 ...]  Start monitoring",
             "  /pr-pilot stop                                    Stop monitoring",
             "  /pr-pilot status                                  Show current state",
@@ -226,6 +288,9 @@ function showHelp(ctx: ExtensionCommandContext): void {
             "",
             "Shorthand:",
             "  /pr-pilot owner/repo#1 owner/repo#2               Same as start",
+            "",
+            "Options:",
+            "  --repo /path    Path to the local repository clone (defaults to cwd)",
         ].join("\n"),
         "info",
     );
