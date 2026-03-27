@@ -18,16 +18,16 @@
  *   or the process is killed
  */
 
-import { existsSync, appendFileSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync } from "node:fs";
 import type {
     MonitorState, PrRef, PrTrackingState,
 } from "./types.js";
 import { formatPrRef } from "./types.js";
-import { loadState, saveState } from "./state.js";
+import { loadState, saveState, eventsFilePath } from "./state.js";
 import { fetchPrSnapshot, fetchComments } from "./gh.js";
 import { diffSnapshot } from "./differ.js";
 import { classifyEvent, type ClassifiedEvent } from "./classifier.js";
+import { consumeEvents, logConsumedEvents } from "./consumer.js";
 
 // ── Entry point ────────────────────────────────────────────────────
 
@@ -38,16 +38,12 @@ function log(level: string, message: string): void {
     console.log(`[${ts}] [pr-pilot] [${level}] ${message}`);
 }
 
-function eventsFile(): string {
-    return join(projectRoot, ".gsd", "pr-pilot", "events.jsonl");
-}
-
 function appendEvent(classified: ClassifiedEvent): void {
     const entry = {
         ...classified,
         writtenAt: new Date().toISOString(),
     };
-    appendFileSync(eventsFile(), JSON.stringify(entry) + "\n");
+    appendFileSync(eventsFilePath(projectRoot), JSON.stringify(entry) + "\n");
 }
 
 async function pollOnce(state: MonitorState): Promise<void> {
@@ -95,6 +91,11 @@ async function pollOnce(state: MonitorState): Promise<void> {
         // Update tracking state
         prState.lastSnapshot = snapshot;
     }
+
+    // Consume events written during this cycle (and any unconsumed from prior cycles)
+    const consumeResult = consumeEvents(projectRoot, state.eventCursor);
+    logConsumedEvents(consumeResult.consumed);
+    state.eventCursor = consumeResult.newCursor;
 
     state.lastPollAt = new Date().toISOString();
 }
