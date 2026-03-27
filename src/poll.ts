@@ -23,11 +23,12 @@ import type {
     MonitorState, PrRef, PrTrackingState,
 } from "./types.js";
 import { formatPrRef } from "./types.js";
-import { loadState, saveState, eventsFilePath } from "./state.js";
+import { loadState, saveState, eventsFilePath, appendFix } from "./state.js";
 import { fetchPrSnapshot, fetchComments } from "./gh.js";
 import { diffSnapshot } from "./differ.js";
 import { classifyEvent, type ClassifiedEvent } from "./classifier.js";
 import { consumeEvents, logConsumedEvents } from "./consumer.js";
+import { attemptFix } from "./fixer.js";
 
 // ── Entry point ────────────────────────────────────────────────────
 
@@ -96,6 +97,22 @@ async function pollOnce(state: MonitorState): Promise<void> {
     const consumeResult = consumeEvents(projectRoot, state.eventCursor);
     logConsumedEvents(consumeResult.consumed);
     state.eventCursor = consumeResult.newCursor;
+
+    // Dispatch fix actions
+    for (const classified of consumeResult.consumed) {
+        if (classified.action === 'fix') {
+            const prKey = formatPrRef(classified.event.ref);
+            const prState = state.prStates.get(prKey);
+            if (prState) {
+                const result = await attemptFix(classified, state.config, prState, projectRoot);
+                appendFix(projectRoot, result);
+                if (classified.event.check) {
+                    prState.attemptedCheckFixes.add(classified.event.check.name);
+                }
+                log('info', `[fix] ${formatPrRef(classified.event.ref)} ${result.outcome}: ${result.description}`);
+            }
+        }
+    }
 
     state.lastPollAt = new Date().toISOString();
 }
