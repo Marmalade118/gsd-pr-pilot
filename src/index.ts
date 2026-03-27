@@ -28,6 +28,7 @@ import { isGhAvailable } from "./gh.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const pollScript = join(__dirname, "poll.js");
+const tuiScript = join(__dirname, "tui.js");
 
 // ── Extension registration ─────────────────────────────────────────
 
@@ -204,8 +205,28 @@ async function handleStart(
 
         child.unref();
 
+        // ── Attempt wmux split creation (best-effort) ──────────────
+        let tuiLaunched = false;
+        try {
+            const cmuxMod = await import("../cmux/index.js" as string).catch(() => null);
+            if (cmuxMod) {
+                const CmuxClient: any = cmuxMod.CmuxClient ?? cmuxMod.default?.CmuxClient;
+                if (CmuxClient) {
+                    const client = CmuxClient.fromPreferences?.();
+                    if (client?.canRun?.()) {
+                        const splitId = await client.createSplit("right");
+                        await client.sendSurface(splitId, `node ${tuiScript} ${ctx.cwd}`);
+                        tuiLaunched = true;
+                    }
+                }
+            }
+        } catch (wmuxErr) {
+            const msg = wmuxErr instanceof Error ? wmuxErr.message : String(wmuxErr);
+            console.error(`[pr-pilot] wmux split failed: ${msg}`);
+        }
+
         ctx.ui.notify(
-            `PR Pilot: monitoring ${refs.length} PR(s): ${prList}\nRepo path: ${resolvedRepo}\nWatcher started (poll.js detached)`,
+            `PR Pilot: monitoring ${refs.length} PR(s): ${prList}\nRepo path: ${resolvedRepo}\nWatcher started (poll.js detached)${tuiLaunched ? "\nTUI opened in split pane" : ""}`,
             "success",
         );
     } catch (err) {

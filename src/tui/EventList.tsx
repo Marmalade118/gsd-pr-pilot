@@ -12,9 +12,25 @@
  * Only active when isActive prop is true (EventList panel is focused).
  */
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { execFileSync } from "node:child_process";
 import { Box, Text, useInput } from "ink";
 import type { ClassifiedEvent } from "../classifier.js";
+
+/**
+ * Fire a WezTerm toast notification. Silently ignored if wezterm CLI is not
+ * available, the pane is not inside WezTerm, or any other error occurs.
+ */
+function sendToast(title: string, body: string): void {
+    try {
+        execFileSync("wezterm", ["cli", "send-notification", "--title", title, "--body", body], {
+            timeout: 5000,
+            stdio: "ignore",
+        });
+    } catch {
+        // wezterm not available, not in a WezTerm terminal, or notification failed — ignore
+    }
+}
 
 interface EventListProps {
     events: ClassifiedEvent[];
@@ -27,6 +43,25 @@ export function EventList({ events, isActive }: EventListProps) {
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
     const [acknowledgedIndices, setAcknowledgedIndices] = useState<Set<number>>(new Set());
+
+    // Track previously-seen event count to detect new arrivals
+    const prevCountRef = useRef(0);
+
+    // Fire toast notifications for newly-arriving escalation events
+    useEffect(() => {
+        const prevCount = prevCountRef.current;
+        if (events.length > prevCount) {
+            // Only look at events added since the last render
+            const newEvents = events.slice(prevCount);
+            for (const ce of newEvents) {
+                if (ce.action === "escalate") {
+                    const prKey = `${ce.event.ref.owner}/${ce.event.ref.repo}#${ce.event.ref.number}`;
+                    sendToast("PR Pilot — Escalation", `${prKey}: ${ce.reason}`);
+                }
+            }
+        }
+        prevCountRef.current = events.length;
+    }, [events]);
 
     // Show most-recent events first, capped at MAX_VISIBLE
     const visible = events.slice(-MAX_VISIBLE).reverse();
