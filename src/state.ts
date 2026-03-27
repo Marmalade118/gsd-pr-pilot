@@ -24,6 +24,10 @@ function fixesLogFile(projectRoot: string): string {
     return join(stateDir(projectRoot), "fixes.jsonl");
 }
 
+export function eventsFilePath(projectRoot: string): string {
+    return join(projectRoot, ".gsd", "pr-pilot", "events.jsonl");
+}
+
 function reportFile(projectRoot: string): string {
     return join(stateDir(projectRoot), "REPORT.md");
 }

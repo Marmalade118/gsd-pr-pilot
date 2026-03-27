@@ -139,6 +139,7 @@ async function handleStart(
         startedAt: new Date().toISOString(),
         lastPollAt: null,
         lastError: null,
+        eventCursor: 0,
     };
 
     saveState(ctx.cwd, state);

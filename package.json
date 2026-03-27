@@ -16,7 +16,7 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "install-ext": "node scripts/install.js",
-    "test": "node --test dist/tests/"
+    "test": "node --test \"dist/tests/*.js\""
   },
   "bin": {
     "gsd-pr-pilot": "scripts/install.js"

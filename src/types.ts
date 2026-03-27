@@ -167,6 +167,8 @@ export interface MonitorConfig {
     pollIntervalSeconds: number;
     /** Maximum fix attempts per PR before giving up */
     maxFixAttempts: number;
+    /** Maps PR key (owner/repo#N) to local filesystem path for the repo clone */
+    repoMap: Record<string, string>;
 }
 
 export const DEFAULT_MONITOR_CONFIG: Omit<MonitorConfig, "prs"> = {
@@ -174,6 +176,7 @@ export const DEFAULT_MONITOR_CONFIG: Omit<MonitorConfig, "prs"> = {
     commentFilter: DEFAULT_COMMENT_FILTER,
     pollIntervalSeconds: 60,
     maxFixAttempts: 5,
+    repoMap: {},
 };
 
 // ── Monitor state (persisted to disk) ──────────────────────────────
@@ -195,6 +198,8 @@ export interface MonitorState {
     lastPollAt: string | null;
     /** Error message if status is "error" */
     lastError: string | null;
+    /** Byte offset into events.jsonl — tracks how far the consumer has read */
+    eventCursor: number;
 }
 
 export interface PrTrackingState {
@@ -246,12 +251,19 @@ export function deserialiseState(raw: Record<string, unknown>): MonitorState {
         });
     }
 
+    const rawConfig = (raw.config ?? {}) as Record<string, unknown>;
+    const config: MonitorConfig = {
+        ...(rawConfig as unknown as MonitorConfig),
+        repoMap: ((rawConfig.repoMap as Record<string, string>) ?? {}),
+    };
+
     return {
         status: raw.status as MonitorStatus,
-        config: raw.config as MonitorConfig,
+        config,
         prStates,
         startedAt: raw.startedAt as string,
         lastPollAt: (raw.lastPollAt as string) ?? null,
         lastError: (raw.lastError as string) ?? null,
+        eventCursor: (raw.eventCursor as number) ?? 0,
     };
 }
