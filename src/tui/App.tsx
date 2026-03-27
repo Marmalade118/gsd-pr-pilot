@@ -1,13 +1,23 @@
 /**
- * gsd-pr-pilot — TUI App component (minimal, expanded in T02)
+ * gsd-pr-pilot — TUI App component (full layout)
  *
- * Renders the root TUI layout. Uses useMonitorData to get live data.
- * This component is intentionally minimal for T01 — it proves the
- * TSX pipeline compiles and the hook is wired. T02 will expand it.
+ * Three-panel layout stacked vertically:
+ *   Top:    PrStatus   — per-PR check/review/fix status
+ *   Middle: EventList  — scrollable events with keyboard nav (flexGrow=1)
+ *   Bottom: FixHistory — recent fix attempt history
+ *
+ * Tab cycles focus between panels (0=PrStatus, 1=EventList, 2=FixHistory).
+ * EventList keyboard controls are only active when focusedPanel === 1.
+ *
+ * Watches state.status — exits cleanly when it becomes "stopped".
  */
 
-import { Box, Text } from "ink";
+import { useState, useEffect } from "react";
+import { Box, Text, useInput, useApp } from "ink";
 import { useMonitorData } from "./useMonitorData.js";
+import { PrStatus } from "./PrStatus.js";
+import { EventList } from "./EventList.js";
+import { FixHistory } from "./FixHistory.js";
 
 interface AppProps {
     projectRoot: string;
@@ -15,6 +25,22 @@ interface AppProps {
 
 export function App({ projectRoot }: AppProps) {
     const { state, events, fixes, loading } = useMonitorData(projectRoot);
+    const [focusedPanel, setFocusedPanel] = useState(1); // default focus on EventList
+    const { exit } = useApp();
+
+    // Cycle panels with Tab
+    useInput((input, key) => {
+        if (key.tab) {
+            setFocusedPanel(prev => (prev + 1) % 3);
+        }
+    });
+
+    // Auto-exit when monitor is stopped
+    useEffect(() => {
+        if (state?.status === "stopped") {
+            exit();
+        }
+    }, [state?.status, exit]);
 
     if (loading) {
         return (
@@ -34,13 +60,40 @@ export function App({ projectRoot }: AppProps) {
         );
     }
 
+    const statusColor =
+        state.status === "running"
+            ? "green"
+            : state.status === "error"
+                ? "red"
+                : "yellow";
+
+    const lastPoll = state.lastPollAt
+        ? new Date(state.lastPollAt).toLocaleTimeString()
+        : "—";
+
     return (
-        <Box flexDirection="column">
-            <Text bold color="cyan">PR Pilot Monitor</Text>
-            <Text>Status: <Text color={state.status === "running" ? "green" : "yellow"}>{state.status}</Text></Text>
-            <Text>PRs: {state.config.prs.length}</Text>
-            <Text>Events: {events.length}</Text>
-            <Text>Fixes: {fixes.length}</Text>
+        <Box flexDirection="column" height="100%">
+            {/* Top: PR status */}
+            <PrStatus state={state} />
+
+            {/* Middle: Event list — takes remaining height */}
+            <EventList
+                events={events}
+                isActive={focusedPanel === 1}
+            />
+
+            {/* Bottom: Fix history */}
+            <FixHistory fixes={fixes} />
+
+            {/* Status bar */}
+            <Box paddingX={1} gap={2}>
+                <Text>
+                    Status:{" "}
+                    <Text color={statusColor}>{state.status}</Text>
+                </Text>
+                <Text dimColor>Last poll: {lastPoll}</Text>
+                <Text dimColor>Tab: switch panel  ↑↓: navigate  d: dismiss  a: ack  f: fix</Text>
+            </Box>
         </Box>
     );
 }
