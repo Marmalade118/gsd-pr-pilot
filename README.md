@@ -100,6 +100,7 @@ All state lives in `.gsd/pr-pilot/` within your project:
 - [GSD/pi](https://github.com/gsd-build/pi) installed
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
 - Node.js ≥ 18
+- Git configured with user name and email
 
 ## Development
 
