@@ -20,7 +20,7 @@ import {
     parsePrRef, formatPrRef,
     DEFAULT_MONITOR_CONFIG, DEFAULT_COMMENT_FILTER,
 } from "./types.js";
-import { loadState, saveState, ensureStateDir, writeReport } from "./state.js";
+import { loadState, saveState, ensureStateDir, writeReport, readPid, isPidAlive, clearPid } from "./state.js";
 import { isGhAvailable } from "./gh.js";
 
 // ── Module-level path resolution (Windows-safe via fileURLToPath) ──
@@ -147,11 +147,22 @@ async function handleStart(
     // Check for existing monitor
     const existing = loadState(ctx.cwd);
     if (existing && existing.status === "running") {
-        ctx.ui.notify(
-            `Monitor is already running (${existing.config.prs.length} PRs). Stop it first with /pr-pilot stop`,
-            "warning",
-        );
-        return;
+        // Check whether the poller process is actually alive
+        const existingPid = readPid(ctx.cwd);
+        if (existingPid !== null && isPidAlive(existingPid)) {
+            ctx.ui.notify(
+                `Monitor is already running (PID ${existingPid}, ${existing.config.prs.length} PRs). Stop it first with /pr-pilot stop`,
+                "warning",
+            );
+            return;
+        } else {
+            // Stale state — poller died without cleaning up
+            ctx.ui.notify(
+                `Stale monitor state detected (PID ${existingPid ?? "unknown"} is no longer alive). Cleaning up and restarting.`,
+                "info",
+            );
+            clearPid(ctx.cwd);
+        }
     }
 
     // ── Build repoMap: each PR key → resolved repo path ───────────
@@ -246,6 +257,7 @@ async function handleStop(ctx: ExtensionCommandContext): Promise<void> {
     }
 
     state.status = "stopped";
+    clearPid(ctx.cwd);
     saveState(ctx.cwd, state);
 
     const reportPath = writeReport(ctx.cwd, state);

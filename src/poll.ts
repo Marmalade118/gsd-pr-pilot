@@ -23,7 +23,7 @@ import type {
     MonitorState, PrRef, PrTrackingState,
 } from "./types.js";
 import { formatPrRef } from "./types.js";
-import { loadState, saveState, eventsFilePath, appendFix } from "./state.js";
+import { loadState, saveState, eventsFilePath, appendFix, writePid, clearPid } from "./state.js";
 import { fetchPrSnapshot, fetchComments } from "./gh.js";
 import { diffSnapshot } from "./differ.js";
 import { classifyEvent, type ClassifiedEvent } from "./classifier.js";
@@ -111,6 +111,8 @@ async function pollOnce(state: MonitorState): Promise<void> {
                 }
                 log('info', `[fix] ${formatPrRef(classified.event.ref)} ${result.outcome}: ${result.description}`);
             }
+        } else if (classified.action === 'escalate') {
+            log('warn', `[escalate] ${formatPrRef(classified.event.ref)}: ${classified.reason}`);
         }
     }
 
@@ -127,6 +129,10 @@ function allPrsDone(state: MonitorState): boolean {
 
 async function main(): Promise<void> {
     log("info", `Starting PR Pilot monitor (project: ${projectRoot})`);
+
+    // Write PID so index.ts can detect a live vs stale poller on restart
+    writePid(projectRoot, process.pid);
+    process.on("exit", () => clearPid(projectRoot));
 
     const state = loadState(projectRoot);
     if (!state) {

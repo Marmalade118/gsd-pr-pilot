@@ -5,7 +5,7 @@
  * State survives process restarts — the polling loop can pick up where it left off.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { MonitorState, FixAttempt, PrRef } from "./types.js";
 import { serialiseState, deserialiseState, formatPrRef } from "./types.js";
@@ -26,6 +26,10 @@ function fixesLogFile(projectRoot: string): string {
 
 export function eventsFilePath(projectRoot: string): string {
     return join(projectRoot, ".gsd", "pr-pilot", "events.jsonl");
+}
+
+export function pidFilePath(projectRoot: string): string {
+    return join(stateDir(projectRoot), "poller.pid");
 }
 
 function reportFile(projectRoot: string): string {
@@ -58,6 +62,53 @@ export function clearState(projectRoot: string): void {
     const path = stateFile(projectRoot);
     if (existsSync(path)) {
         writeFileSync(path, "");
+    }
+}
+
+// ── PID tracking (R015) ────────────────────────────────────────────
+
+/** Write the given PID to the pidfile, ensuring the state dir exists. */
+export function writePid(projectRoot: string, pid: number): void {
+    ensureStateDir(projectRoot);
+    writeFileSync(pidFilePath(projectRoot), String(pid), "utf-8");
+}
+
+/** Read the PID from the pidfile. Returns null if the file is absent or unreadable. */
+export function readPid(projectRoot: string): number | null {
+    const path = pidFilePath(projectRoot);
+    if (!existsSync(path)) return null;
+    try {
+        const raw = readFileSync(path, "utf-8").trim();
+        const pid = parseInt(raw, 10);
+        return Number.isFinite(pid) ? pid : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Returns true if the process with the given PID is alive.
+ * Uses `process.kill(pid, 0)` which works on both Unix and Windows:
+ * no signal is sent — it only probes whether the PID exists.
+ */
+export function isPidAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/** Delete the pidfile if it exists. */
+export function clearPid(projectRoot: string): void {
+    const path = pidFilePath(projectRoot);
+    if (existsSync(path)) {
+        try {
+            unlinkSync(path);
+        } catch {
+            // Ignore deletion errors (race condition on exit is fine)
+        }
     }
 }
 
