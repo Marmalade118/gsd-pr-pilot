@@ -1,0 +1,43 @@
+{
+  "name": "gsd-pr-pilot",
+  "version": "0.1.0",
+  "description": "Background PR monitor for GSD/pi — watches CI checks and review comments, auto-fixes deterministic failures, escalates the rest",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "scripts/",
+    "agents/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "install-ext": "node scripts/install.js",
+    "test": "node --test dist/tests/"
+  },
+  "bin": {
+    "gsd-pr-pilot": "scripts/install.js"
+  },
+  "keywords": [
+    "gsd",
+    "pi",
+    "github",
+    "pull-request",
+    "ci",
+    "code-review",
+    "agent",
+    "monitor"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
