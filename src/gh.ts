@@ -88,23 +88,50 @@ export function fetchPrSnapshot(ref: PrRef): PrSnapshot | null {
     };
 }
 
+/** Map raw `gh pr checks --json name,state,link` output to CheckRun objects */
+export function mapRawChecks(raw: Array<{ name: string; state: string; link?: string }>): CheckRun[] {
+    return raw.map(c => {
+        const isPending = c.state === "PENDING";
+        return {
+            name: c.name,
+            status: isPending ? "in_progress" : "completed",
+            conclusion: isPending ? null : (c.state.toLowerCase() as CheckConclusion),
+            detailsUrl: c.link ?? null,
+        };
+    });
+}
+
 /** Fetch check runs for a PR */
 export function fetchChecks(ref: PrRef): CheckRun[] {
-    // gh pr checks returns a table; use the JSON API instead
+    // gh pr checks --json uses: name, state (SUCCESS/FAILURE/SKIPPED/PENDING), link
     const raw = ghJson<Array<{
         name: string;
-        status: string;
-        conclusion: string;
-        detailsUrl: string;
-    }>>(`pr checks ${ref.number} --repo ${ref.owner}/${ref.repo} --json name,status,conclusion,detailsUrl`);
+        state: string;
+        link?: string;
+    }>>(`pr checks ${ref.number} --repo ${ref.owner}/${ref.repo} --json name,state,link`);
 
     if (!raw) return [];
 
+    return mapRawChecks(raw);
+}
+
+/** Map raw GitHub API review comment objects to PrComment objects (minus source classification) */
+export function mapRawReviewComments(raw: Array<{
+    id: number;
+    user?: { login?: string };
+    body: string;
+    created_at: string;
+    path?: string;
+    original_line?: number | null;
+}>): Array<Omit<PrComment, "source">> {
     return raw.map(c => ({
-        name: c.name,
-        status: c.status.toLowerCase() as CheckRun["status"],
-        conclusion: (c.conclusion?.toLowerCase() || null) as CheckConclusion | null,
-        detailsUrl: c.detailsUrl || null,
+        id: c.id,
+        author: c.user?.login ?? "unknown",
+        body: c.body,
+        createdAt: c.created_at,
+        path: c.path ?? null,
+        line: c.original_line ?? null,
+        isReviewComment: true,
     }));
 }
 
@@ -118,15 +145,15 @@ export function fetchComments(ref: PrRef): PrComment[] {
         createdAt: string;
     }>>(`pr view ${ref.number} --repo ${ref.owner}/${ref.repo} --json comments --jq '.comments'`) ?? [];
 
-    // Review comments (on specific lines)
-    const reviewComments = ghJson<Array<{
+    // Review comments — fetch raw API response (no --jq: avoids JSONL parse failure with 2+ comments)
+    const reviewRaw = ghJson<Array<{
         id: number;
-        author: { login: string };
+        user?: { login?: string };
         body: string;
-        createdAt: string;
-        path: string;
-        line: number;
-    }>>(`api repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments --jq '.[] | {id, author: .user, body, createdAt: .created_at, path, line: .original_line}'`) ?? [];
+        created_at: string;
+        path?: string;
+        original_line?: number | null;
+    }>>(`api repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments`) ?? [];
 
     const comments: PrComment[] = [];
 
@@ -143,16 +170,10 @@ export function fetchComments(ref: PrRef): PrComment[] {
         });
     }
 
-    for (const c of reviewComments) {
+    for (const c of mapRawReviewComments(reviewRaw)) {
         comments.push({
-            id: c.id,
-            author: c.author?.login ?? "unknown",
-            body: c.body,
-            source: classifyCommentSource(c.author?.login ?? "unknown", c.body),
-            createdAt: c.createdAt,
-            path: c.path,
-            line: c.line,
-            isReviewComment: true,
+            ...c,
+            source: classifyCommentSource(c.author, c.body),
         });
     }
 
